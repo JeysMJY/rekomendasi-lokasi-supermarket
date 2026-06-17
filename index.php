@@ -2,60 +2,23 @@
 // php-rlsm/index.php
 require_once __DIR__ . '/algorithms.php';
 
-$hasilGreedy = null;
-$hasilDp = null;
-$waktuGreedy = 0;
-$waktuDp = 0;
-$hasilBnB = null;
-$waktuBnB = 0;
-$budget = '';
-$jarak = '';
-$dataPoints = [];
-$dbEmpty = false;
-$dbError = null;
+$daftarLokasi = load_raw_data();
+$dbEmpty = count($daftarLokasi) === 0;
+$hasilGA = null;
 
-try {
-    $pdo = get_db_connection();
-    $stmt = $pdo->query("SELECT COUNT(*) FROM lokasi");
-    $count = $stmt->fetchColumn();
-    if ($count == 0) {
-        $dbEmpty = true;
-    }
-} catch (Exception $e) {
-    $dbError = $e->getMessage();
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$dbEmpty) {
+    $normalizedData = preprocess_and_normalize($daftarLokasi);
+    $hasilGA = jalankanGA($normalizedData, 100, 30);
 }
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$dbEmpty && !$dbError) {
-    $budget = isset($_POST['budget']) ? (int)$_POST['budget'] : 0;
-    $jarak = isset($_POST['jarak']) ? (float)str_replace(',', '.', $_POST['jarak']) : 0.0;
-
-    $daftarLokasi = load_and_preprocess_data();
-
-    if (count($daftarLokasi) > 0) {
-        // Eksekusi Greedy
-        $startGreedy = hrtime(true);
-        $hasilGreedy = jalankanGreedy($daftarLokasi, $budget, $jarak);
-        $waktuGreedy = (hrtime(true) - $startGreedy) / 1e9; // Konversi ke detik
-
-        // Eksekusi DP
-        $startDp = hrtime(true);
-        $hasilDp = jalankanDp($daftarLokasi, $budget);
-        $waktuDp = (hrtime(true) - $startDp) / 1e9; // Konversi ke detik
-
-        // Eksekusi Branch and Bound
-        $startBnB = hrtime(true);
-        $hasilBnB = jalankanBnB($daftarLokasi, $budget, $jarak);
-        $waktuBnB = (hrtime(true) - $startBnB) / 1e9;
-    }
-}
+$totalKandidat = count($daftarLokasi);
 ?>
 <!DOCTYPE html>
 <html lang="id">
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sistem Penentuan Lokasi Supermarket</title>
+    <title>Sistem Optimasi Lokasi Supermarket - Genetic Algorithm (GA)</title>
     <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -64,25 +27,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$dbEmpty && !$dbError) {
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         :root {
-            --bg-color: #f8fafc;
-            --card-bg: #ffffff;
-            --text-main: #0f172a;
-            --text-muted: #64748b;
+            --bg-color: #070a13;
+            --card-bg: rgba(15, 23, 42, 0.65);
+            --border-color: rgba(255, 255, 255, 0.08);
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
             --primary: #2563eb;
             --primary-hover: #1d4ed8;
             --success: #10b981;
-            --success-bg: #ecfdf5;
-            --success-border: #a7f3d0;
-            --success-text: #047857;
             --warning: #f59e0b;
             --danger: #ef4444;
-            --border-color: #e2e8f0;
             --radius-lg: 16px;
             --radius-md: 12px;
             --radius-sm: 8px;
-            --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
-            --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
-            --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+            --shadow-lg: 0 10px 30px -10px rgba(0, 0, 0, 0.7);
         }
 
         * {
@@ -90,340 +48,380 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$dbEmpty && !$dbError) {
             margin: 0;
             padding: 0;
             font-family: 'Outfit', sans-serif;
-            transition: all 0.2s ease;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
         }
 
         body {
             background-color: var(--bg-color);
+            background-image: radial-gradient(circle at 10% 20%, rgba(37, 99, 235, 0.08) 0%, transparent 40%),
+                              radial-gradient(circle at 90% 80%, rgba(139, 92, 246, 0.08) 0%, transparent 40%);
             color: var(--text-main);
             min-height: 100vh;
-            padding: 40px 20px;
+            padding-bottom: 60px;
+        }
+
+        /* Glass Nav */
+        .glass-nav {
+            position: sticky;
+            top: 0;
+            z-index: 50;
+            background: rgba(7, 10, 19, 0.75);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .nav-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px 24px;
+        }
+
+        .nav-brand {
+            font-size: 1.3rem;
+            font-weight: 700;
+            color: #fff;
+            text-decoration: none;
+            background: linear-gradient(135deg, #60a5fa, #c084fc);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 16px;
+        }
+
+        .nav-link {
+            text-decoration: none;
+            color: var(--text-muted);
+            font-weight: 500;
+            padding: 8px 16px;
+            border-radius: var(--radius-sm);
+        }
+
+        .nav-link:hover {
+            color: #fff;
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .nav-link.active {
+            color: #fff;
+            background: rgba(37, 99, 235, 0.15);
+            border: 1px solid rgba(37, 99, 235, 0.3);
         }
 
         .container {
             max-width: 1000px;
-            margin: 0 auto;
+            margin: 40px auto 0;
+            padding: 0 24px;
         }
 
         header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            margin-bottom: 40px;
+            margin-bottom: 35px;
         }
 
         h1 {
-            font-size: 2.2rem;
+            font-size: 2rem;
             font-weight: 700;
-            color: var(--text-main);
             letter-spacing: -0.02em;
+            background: linear-gradient(to right, #fff, #94a3b8);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
         }
 
-        .btn-manage {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            text-decoration: none;
-            background-color: var(--primary);
-            color: white;
-            padding: 12px 24px;
-            border-radius: var(--radius-md);
-            font-weight: 600;
-            box-shadow: var(--shadow-md);
+        .subtitle {
+            color: var(--text-muted);
+            margin-top: 4px;
+            font-size: 0.95rem;
         }
 
-        .btn-manage:hover {
-            background-color: var(--primary-hover);
-            transform: translateY(-2px);
-            box-shadow: var(--shadow-lg);
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 35px;
         }
 
-        /* Form Card */
+        .stat-card {
+            background: var(--card-bg);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-lg);
+            padding: 20px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .stat-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 4px;
+            background: linear-gradient(to right, var(--primary), #8b5cf6);
+            opacity: 0.7;
+        }
+
+        .stat-label {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 6px;
+        }
+
+        .stat-value {
+            font-size: 1.6rem;
+            font-weight: 700;
+            color: #fff;
+        }
+
+        /* Optimize Card */
         .card-form {
             background: var(--card-bg);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            border: 1px solid var(--border-color);
             border-radius: var(--radius-lg);
-            border: 1px solid var(--border-color);
-            box-shadow: var(--shadow-md);
             padding: 30px;
-            margin-bottom: 40px;
+            margin-bottom: 35px;
+            box-shadow: var(--shadow-lg);
+            text-align: center;
         }
 
-        .form-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 24px;
-            margin-bottom: 24px;
-        }
-
-        @media (max-width: 768px) {
-            .form-grid {
-                grid-template-columns: 1fr;
-            }
-
-            header {
-                flex-direction: column;
-                align-items: flex-start;
-                gap: 16px;
-            }
-        }
-
-        .form-group {
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-        }
-
-        label {
-            font-weight: 600;
-            font-size: 0.95rem;
-            color: #334155;
-        }
-
-        input[type="number"] {
-            padding: 14px 16px;
-            border: 1px solid var(--border-color);
-            border-radius: var(--radius-sm);
-            font-size: 1rem;
-            background-color: #f8fafc;
-            width: 100%;
-        }
-
-        input[type="number"]:focus {
-            outline: none;
-            border-color: var(--primary);
-            background-color: #ffffff;
-            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
-        }
-
-        .btn-calculate {
-            background-color: var(--primary);
+        .btn-optimize {
+            background: linear-gradient(135deg, var(--primary), #8b5cf6);
             color: white;
             border: none;
-            padding: 16px;
+            padding: 16px 32px;
             border-radius: var(--radius-md);
             font-size: 1.1rem;
             font-weight: 600;
             cursor: pointer;
-            width: 100%;
-            box-shadow: var(--shadow-md);
+            box-shadow: 0 4px 15px rgba(59, 130, 246, 0.35);
+            margin-top: 15px;
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
         }
 
-        .btn-calculate:hover {
-            background-color: var(--primary-hover);
-            transform: translateY(-1px);
+        .btn-optimize:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 22px rgba(59, 130, 246, 0.5);
         }
 
-        /* Alert styling */
-        .alert {
-            padding: 16px 20px;
-            border-radius: var(--radius-md);
+        .alert-empty {
+            background-color: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.2);
+            color: #fca5a5;
+            padding: 20px;
+            border-radius: var(--radius-lg);
             margin-bottom: 30px;
-            font-size: 0.95rem;
-            line-height: 1.5;
+            text-align: center;
         }
 
-        .alert-info {
-            background-color: #eff6ff;
-            border: 1px solid #bfdbfe;
-            color: #1e3a8a;
-        }
-
-        .alert-info a {
-            color: var(--primary);
+        .alert-empty a {
+            color: #93c5fd;
             font-weight: 600;
             text-decoration: underline;
         }
 
-        .alert-success {
-            background-color: var(--success-bg);
-            border: 1px solid var(--success-border);
-            color: var(--success-text);
-        }
-
-        /* Results section */
-        .results-header {
-            font-size: 1.8rem;
-            font-weight: 700;
-            margin-bottom: 24px;
-            border-bottom: 2px solid var(--border-color);
-            padding-bottom: 12px;
-            color: #1e293b;
-        }
-
-        .grid-results {
+        /* Split Result Layout */
+        .result-layout {
             display: grid;
-            grid-template-columns: 1fr 1fr;
+            grid-template-columns: 1fr 1.5fr;
             gap: 30px;
-            margin-bottom: 40px;
-        }
-
-        @media (max-width: 900px) {
-            .grid-results {
-                grid-template-columns: 1fr;
-            }
-        }
-
-        .card-result {
-            background: var(--card-bg);
-            border: 1px solid var(--border-color);
-            border-radius: var(--radius-lg);
-            padding: 24px;
-            box-shadow: var(--shadow-md);
-        }
-
-        .card-result h3 {
-            font-size: 1.3rem;
-            font-weight: 700;
-            margin-bottom: 16px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-        }
-
-        .method-badge {
-            font-size: 0.75rem;
-            padding: 4px 10px;
-            border-radius: 9999px;
-            font-weight: 600;
-        }
-
-        .badge-greedy {
-            background-color: #e0f2fe;
-            color: #0369a1;
-        }
-
-        .badge-dp {
-            background-color: #dcfce7;
-            color: #15803d;
-        }
-
-        .meta-info {
-            display: flex;
-            justify-content: space-between;
-            background-color: #f8fafc;
-            padding: 12px 16px;
-            border-radius: var(--radius-sm);
-            margin-bottom: 20px;
-            font-size: 0.9rem;
-            color: var(--text-muted);
-        }
-
-        .meta-info strong {
-            color: var(--text-main);
-        }
-
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 0.9rem;
-        }
-
-        th {
-            background-color: #f1f5f9;
-            color: var(--text-muted);
-            font-weight: 600;
-            text-align: left;
-            padding: 10px 14px;
-            border-bottom: 1px solid var(--border-color);
-        }
-
-        td {
-            padding: 12px 14px;
-            border-bottom: 1px solid var(--border-color);
-            color: #334155;
-        }
-
-        tr:last-child td {
-            border-bottom: none;
-        }
-
-        /* Chart section */
-        .chart-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 30px;
-            margin-top: 40px;
+            margin-bottom: 35px;
         }
 
         @media (max-width: 768px) {
-            .chart-grid {
+            .result-layout {
                 grid-template-columns: 1fr;
             }
         }
 
-        .chart-card {
+        .card-result-glow {
             background: var(--card-bg);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
             border: 1px solid var(--border-color);
             border-radius: var(--radius-lg);
-            padding: 24px;
-            box-shadow: var(--shadow-md);
-            height: 320px;
+            padding: 30px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            box-shadow: var(--shadow-lg);
             position: relative;
         }
 
-        .chart-card h4 {
+        .glow-circle {
+            width: 140px;
+            height: 140px;
+            border-radius: 50%;
+            background: rgba(37, 99, 235, 0.05);
+            border: 4px solid var(--primary);
+            box-shadow: 0 0 25px rgba(37, 99, 235, 0.4);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.8rem;
+            font-weight: 700;
+            color: #fff;
+            margin-bottom: 20px;
+        }
+
+        .card-result-details {
+            background: var(--card-bg);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-lg);
+            padding: 30px;
+            box-shadow: var(--shadow-lg);
+        }
+
+        .result-details-title {
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: #fff;
+            margin-bottom: 20px;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 10px;
+        }
+
+        .details-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+
+        @media (max-width: 480px) {
+            .details-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .detail-item {
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-sm);
+            padding: 12px 16px;
+        }
+
+        .detail-label {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 4px;
+        }
+
+        .detail-value {
             font-size: 1.1rem;
             font-weight: 600;
-            margin-bottom: 16px;
+            color: #fff;
+        }
+
+        /* Chart Card */
+        .chart-card {
+            background: var(--card-bg);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-lg);
+            padding: 30px;
+            box-shadow: var(--shadow-lg);
+            margin-bottom: 30px;
+        }
+
+        .chart-title {
+            font-size: 1.15rem;
+            font-weight: 700;
+            color: #fff;
+            margin-bottom: 20px;
             text-align: center;
-            color: #475569;
+        }
+
+        .chart-container {
+            height: 320px;
+            position: relative;
         }
     </style>
 </head>
-
 <body>
 
-    <div class="container">
-        <header>
-            <div>
-                <h1>Optimasi Lokasi Supermarket</h1>
-                <p style="color: var(--text-muted); margin-top: 4px;">Tentukan koordinat cabang baru dengan alokasi budget efisien.</p>
-            </div>
-            <a href="kelola_lokasi.php" class="btn-manage">
-                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <rect x="3" y="3" width="7" height="9"></rect>
-                    <rect x="14" y="3" width="7" height="5"></rect>
-                    <rect x="14" y="12" width="7" height="9"></rect>
-                    <rect x="3" y="16" width="7" height="5"></rect>
-                </svg>
-                Kelola Data Lokasi
-            </a>
-        </header>
+<nav class="glass-nav">
+    <div class="nav-container">
+        <a href="index.php" class="nav-brand">🧬 GA SPK</a>
+        <div class="nav-links">
+            <a href="index.php" class="nav-link active">Dashboard</a>
+            <a href="kelola_lokasi.php" class="nav-link">Kelola Lokasi</a>
+        </div>
+    </div>
+</nav>
 
-        <?php if ($dbError): ?>
-            <div class="alert alert-info" style="background-color: #fee2e2; border-color: #fca5a5; color: #b91c1c;">
-                <strong>Koneksi Database Gagal!</strong><br>
-                Detail Error: <?= htmlspecialchars($dbError) ?><br><br>
-                Silakan jalankan database setup dengan membuka <a href="db_setup.php" style="color: #b91c1c; text-decoration: underline;">db_setup.php</a>.
-            </div>
-        <?php elseif ($dbEmpty): ?>
-            <div class="alert alert-info">
-                <strong>Database Kosong!</strong><br>
-                Data lokasi belum tersedia di database. Silakan lakukan inisialisasi awal database dengan mengklik tombol di bawah ini:
-                <div style="margin-top: 12px;">
-                    <a href="db_setup.php" class="btn-manage" style="padding: 8px 16px; font-size: 0.85rem; background-color: var(--success);">Inisialisasi Database</a>
-                </div>
-            </div>
-        <?php endif; ?>
+<div class="container">
+    <header>
+        <h1>Optimasi Lokasi Supermarket</h1>
+        <p class="subtitle">Sistem Penunjang Keputusan berbasis Algoritma Genetika (Genetic Algorithm - GA) sesuai metodologi jurnal.</p>
+    </header>
 
+    <?php if ($dbEmpty): ?>
+        <div class="alert-empty">
+            <h3 style="font-weight: 700; margin-bottom: 8px;">Database Kandidat Kosong!</h3>
+            <p>Silakan lakukan import data awal terlebih dahulu dengan membuka <a href="db_setup.php">db_setup.php</a> atau tambahkan kandidat secara manual di halaman <a href="kelola_lokasi.php">Kelola Lokasi</a>.</p>
+        </div>
+    <?php else: ?>
+        <!-- Stats Summary Card -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-label">Kandidat Lokasi Terdaftar</div>
+                <div class="stat-value"><?= $totalKandidat ?> Alternatif</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Ukuran Populasi (GA)</div>
+                <div class="stat-value">30 Kromosom</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Maksimal Generasi</div>
+                <div class="stat-value">100 Generasi</div>
+            </div>
+        </div>
+
+        <!-- Optimize Button Area -->
         <div class="card-form">
-            <form method="POST" action="index.php">
-                <div class="form-grid">
-                    <div class="form-group">
-                        <label for="budget">Budget Maksimal (Juta Rp):</label>
-                        <input type="number" id="budget" name="budget" required placeholder="Contoh: 1000" value="<?= htmlspecialchars($budget) ?>">
-                    </div>
-                    <div class="form-group">
-                        <label for="jarak">Jarak Minimum Antar Lokasi (KM):</label>
-                        <input type="number" step="0.1" id="jarak" name="jarak" required placeholder="Contoh: 2.5" value="<?= htmlspecialchars($jarak) ?>">
-                    </div>
-                </div>
-                <button type="submit" class="btn-calculate" <?= ($dbEmpty || $dbError) ? 'disabled style="opacity: 0.5; cursor: not-allowed;"' : '' ?>>
-                    Hitung Optimasi Rekomendasi
+            <form method="POST">
+                <h3 style="font-weight: 600; font-size: 1.1rem; color: #cbd5e1; margin-bottom: 8px;">Siap Melakukan Analisis Lokasi?</h3>
+                <p style="color: var(--text-muted); font-size: 0.95rem; max-width: 600px; margin: 0 auto 10px;">Algoritma Genetika akan mengevaluasi populasi biner secara evolusioner (seleksi, crossover, mutasi) untuk mencari rekomendasi optimal.</p>
+                <button type="submit" class="btn-optimize">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="animation: pulse 2s infinite;"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                    Jalankan Proses Optimasi GA
                 </button>
             </form>
         </div>
+    <?php endif; ?>
 
+<<<<<<< HEAD
+    <?php if ($hasilGA !== null): ?>
+        <!-- Split Results Layout -->
+        <div class="result-layout">
+            <!-- Glow Fitness Card -->
+            <div class="card-result-glow">
+                <div class="glow-circle">
+                    <?= number_format($hasilGA['fitnessTerbaik'], 4) ?>
+                </div>
+                <h3 style="font-weight: 700; font-size: 1.2rem; color: #fff; margin-bottom: 4px;">Rekomendasi Terbaik</h3>
+                <p style="color: var(--text-muted); font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em;">Skor Fitness Tertinggi (GA)</p>
+=======
         <?php if ($hasilGreedy !== null && $hasilDp !== null): ?>
             <h2 class="results-header">Hasil Analisis Optimasi</h2>
 
@@ -452,60 +450,41 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$dbEmpty && !$dbError) {
                         <?php endif; ?>
                     </p>
                 <?php endif; ?>
+>>>>>>> 95e2d917f2d85196141b3feb088bea60b7b11f46
             </div>
 
-            <div class="grid-results">
-                <!-- Greedy Card -->
-                <div class="card-result">
-                    <h3>
-                        1. Pendekatan Greedy
-                        <span class="method-badge badge-greedy">Greedy</span>
-                    </h3>
-                    <div class="meta-info">
-                        <div>Value: <strong><?= $hasilGreedy['totalValue'] ?></strong></div>
-                        <div>Cost: <strong>Rp <?= number_format($hasilGreedy['totalCost'], 0, ',', '.') ?> Jt</strong></div>
-                        <div>Waktu: <strong><?= number_format($waktuGreedy, 8) ?> s</strong></div>
-                    </div>
-                    <table>
-                        <thead>
-                            <tr>
-                                <th style="width: 40px;">No</th>
-                                <th>Nama Daerah</th>
-                                <th>Cost</th>
-                                <th>Value</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php if (count($hasilGreedy['lokasiTerpilih']) > 0): ?>
-                                <?php $no = 1;
-                                foreach ($hasilGreedy['lokasiTerpilih'] as $loc): ?>
-                                    <tr>
-                                        <td><?= $no++ ?></td>
-                                        <td><strong><?= htmlspecialchars($loc['nama_daerah']) ?></strong></td>
-                                        <td><?= $loc['cost'] ?></td>
-                                        <td><?= $loc['value'] ?></td>
-                                    </tr>
-                                <?php endforeach; ?>
-                            <?php else: ?>
-                                <tr>
-                                    <td colspan="4" style="text-align: center; color: var(--text-muted);">Tidak ada lokasi terpilih (budget tidak mencukupi atau konflik jarak).</td>
-                                </tr>
-                            <?php endif; ?>
-                        </tbody>
-                    </table>
+            <!-- Detailed Parameter Grid -->
+            <div class="card-result-details">
+                <div class="result-details-title">
+                    <span style="color: var(--success); font-weight: 700; font-size: 1.4rem;"><?= htmlspecialchars($hasilGA['lokasiTerbaik']['nama_daerah']) ?></span>
                 </div>
-
-                <!-- DP Card -->
-                <div class="card-result">
-                    <h3>
-                        2. Pendekatan DP
-                        <span class="method-badge badge-dp">Knapsack 0-1</span>
-                    </h3>
-                    <div class="meta-info">
-                        <div>Value: <strong><?= $hasilDp['totalValue'] ?></strong></div>
-                        <div>Cost: <strong>Rp <?= number_format($hasilDp['totalCost'], 0, ',', '.') ?> Jt</strong></div>
-                        <div>Waktu: <strong><?= number_format($waktuDp, 8) ?> s</strong></div>
+                
+                <div class="details-grid">
+                    <div class="detail-item">
+                        <div class="detail-label">Populasi Penduduk</div>
+                        <div class="detail-value"><?= number_format($hasilGA['lokasiTerbaik']['populasi'], 0, ',', '.') ?> Ribu</div>
                     </div>
+<<<<<<< HEAD
+                    <div class="detail-item">
+                        <div class="detail-label">Pendapatan Masyarakat</div>
+                        <div class="detail-value">Rp <?= number_format($hasilGA['lokasiTerbaik']['pendapatan'], 0, ',', '.') ?> Jt/Thn</div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="detail-label">Aksesibilitas Lokasi</div>
+                        <div class="detail-value"><?= $hasilGA['lokasiTerbaik']['aksesibilitas'] ?> / 10</div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="detail-label">Jarak ke Kompetitor</div>
+                        <div class="detail-value"><?= number_format($hasilGA['lokasiTerbaik']['jarak_pesaing'], 2, ',', '.') ?> Km</div>
+                    </div>
+                    <div class="detail-item" style="border-color: rgba(239, 68, 68, 0.25);">
+                        <div class="detail-label">Sewa Tanah (Cost)</div>
+                        <div class="detail-value" style="color: #f87171;">Rp <?= number_format($hasilGA['lokasiTerbaik']['sewa_tanah'], 0, ',', '.') ?> Jt/Thn</div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="detail-label">Volume Lalu Lintas</div>
+                        <div class="detail-value"><?= number_format($hasilGA['lokasiTerbaik']['lalu_lintas'], 0, ',', '.') ?> Kend/Jam</div>
+=======
                     <table>
                         <thead>
                             <tr>
@@ -544,132 +523,71 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$dbEmpty && !$dbError) {
                         <div>Value: <strong><?= $hasilBnB['totalValue'] ?></strong></div>
                         <div>Cost: <strong>Rp <?= number_format($hasilBnB['totalCost'], 0, ',', '.') ?> Jt</strong></div>
                         <div>Waktu: <strong><?= number_format($waktuBnB, 8) ?> s</strong></div>
+>>>>>>> 95e2d917f2d85196141b3feb088bea60b7b11f46
                     </div>
-                    <table>
-                        <thead>
-                            <tr>
-                                <th style="width: 40px;">No</th>
-                                <th>Nama Daerah</th>
-                                <th>Cost</th>
-                                <th>Value</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php if (count($hasilBnB['lokasiTerpilih']) > 0): ?>
-                                <?php $no = 1;
-                                foreach ($hasilBnB['lokasiTerpilih'] as $loc): ?>
-                                    <tr>
-                                        <td><?= $no++ ?></td>
-                                        <td><strong><?= htmlspecialchars($loc['nama_daerah']) ?></strong></td>
-                                        <td><?= $loc['cost'] ?></td>
-                                        <td><?= $loc['value'] ?></td>
-                                    </tr>
-                                <?php endforeach; ?>
-                            <?php else: ?>
-                                <tr>
-                                    <td colspan="4" style="text-align: center; color: var(--text-muted);">Tidak ada lokasi terpilih (budget tidak mencukupi atau konflik jarak).</td>
-                                </tr>
-                            <?php endif; ?>
-                        </tbody>
-                    </table>
                 </div>
             </div>
+        </div>
 
-            <!-- Charts Section -->
-            <h2 class="results-header" style="margin-top: 40px;">Visualisasi Komparasi Performa</h2>
-            <div class="chart-grid">
-                <div class="chart-card">
-                    <h4>Perbandingan Total Value (Semakin Besar Semakin Baik)</h4>
-                    <canvas id="valueChart"></canvas>
-                </div>
-                <div class="chart-card">
-                    <h4>Perbandingan Waktu Eksekusi (Detik - Semakin Kecil Semakin Baik)</h4>
-                    <canvas id="timeChart"></canvas>
-                </div>
+        <!-- Convergence Line Chart -->
+        <div class="chart-card">
+            <h3 class="chart-title">Grafik Konvergensi GA (GA Fitness Convergence Curve)</h3>
+            <div class="chart-container">
+                <canvas id="convergenceChart"></canvas>
             </div>
+        </div>
 
-            <script>
-                // Value comparison chart
-                const ctxValue = document.getElementById('valueChart').getContext('2d');
-                new Chart(ctxValue, {
-                    type: 'bar',
-                    data: {
-                        labels: ['Greedy', 'Dynamic Programming', 'Branch and Bound'],
-                        datasets: [{
-                            label: 'Total Value',
-                            data: [<?= $hasilGreedy['totalValue'] ?>, <?= $hasilDp['totalValue'] ?>, <?= $hasilBnB['totalValue'] ?>],
-                            backgroundColor: ['#3b82f6', '#10b981', '#f59e0b'],
-                            borderColor: ['#2563eb', '#059669', '#d97706'],
-                            borderWidth: 1,
-                            borderRadius: 6
-                        }]
+        <script>
+            const ctx = document.getElementById('convergenceChart').getContext('2d');
+            const historyData = <?= json_encode($hasilGA['history']) ?>;
+            
+            // Create a premium blue-indigo gradient for fill
+            const gradient = ctx.createLinearGradient(0, 0, 0, 300);
+            gradient.addColorStop(0, 'rgba(59, 130, 246, 0.25)');
+            gradient.addColorStop(1, 'rgba(139, 92, 246, 0.01)');
+            
+            new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: Object.keys(historyData),
+                    datasets: [{
+                        label: 'Fitness Terbaik',
+                        data: Object.values(historyData),
+                        borderColor: '#60a5fa',
+                        backgroundColor: gradient,
+                        borderWidth: 3,
+                        fill: true,
+                        pointBackgroundColor: '#8b5cf6',
+                        pointBorderColor: '#fff',
+                        pointRadius: 2,
+                        pointHoverRadius: 6,
+                        tension: 0.3
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: false
+                        }
                     },
-                    options: {
-                        responsive: true,
-                        maintainAspectRatio: false,
-                        plugins: {
-                            legend: {
-                                display: false
-                            }
+                    scales: {
+                        x: { 
+                            title: { display: true, text: 'Iterasi Ke-', color: '#94a3b8' },
+                            grid: { color: 'rgba(255, 255, 255, 0.05)' },
+                            ticks: { color: '#94a3b8' }
                         },
-                        scales: {
-                            y: {
-                                beginAtZero: true,
-                                grid: {
-                                    color: '#f1f5f9'
-                                }
-                            },
-                            x: {
-                                grid: {
-                                    display: false
-                                }
-                            }
+                        y: { 
+                            title: { display: true, text: 'Nilai Fitness', color: '#94a3b8' },
+                            grid: { color: 'rgba(255, 255, 255, 0.05)' },
+                            ticks: { color: '#94a3b8' }
                         }
                     }
-                });
-
-                // Time execution comparison chart
-                const ctxTime = document.getElementById('timeChart').getContext('2d');
-                new Chart(ctxTime, {
-                    type: 'bar',
-                    data: {
-                        labels: ['Greedy', 'Dynamic Programming', 'Branch and Bound'],
-                        datasets: [{
-                            label: 'Waktu Eksekusi (Detik)',
-                            data: [<?= sprintf('%.10f', $waktuGreedy) ?>, <?= sprintf('%.10f', $waktuDp) ?>, <?= sprintf('%.10f', $waktuBnB) ?>],
-                            backgroundColor: ['#ef4444', '#f59e0b', '#8b5cf6'],
-                            borderColor: ['#dc2626', '#d97706', '#7c3aed'],
-                            borderWidth: 1,
-                            borderRadius: 6
-                        }]
-                    },
-                    options: {
-                        responsive: true,
-                        maintainAspectRatio: false,
-                        plugins: {
-                            legend: {
-                                display: false
-                            }
-                        },
-                        scales: {
-                            y: {
-                                beginAtZero: true,
-                                grid: {
-                                    color: '#f1f5f9'
-                                }
-                            },
-                            x: {
-                                grid: {
-                                    display: false
-                                }
-                            }
-                        }
-                    }
-                });
-            </script>
-        <?php endif; ?>
-    </div>
-
+                }
+            });
+        </script>
+    <?php endif; ?>
+</div>
 </body>
-
 </html>
